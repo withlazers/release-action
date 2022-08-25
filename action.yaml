@@ -1,0 +1,79 @@
+name: Release
+description: >
+  Releases a project
+inputs:
+  helm_chart:
+    description: "whether to release the helm chart"
+    required: false
+    default: ""
+  helm_path:
+    description: "Path where all helm paths are located"
+    required: true
+    default: "./charts"
+  ssh_key:
+    description: "ssh key to use"
+    required: true
+    default: ""
+  artifacts:
+    description: "wildcard to choose artifacts."
+    required: true
+    default: ""
+  files:
+    description: "wildcard to choose files within artifacts."
+    required: true
+    default: "*.tar.gz"
+  token:
+    description: github token
+    required: true
+
+runs:
+  using: composite
+  steps:
+  - name: download artifacts
+    if: ${{ inputs.artifacts != '' }}
+    uses: actions/download-artifact@v3
+    with:
+      path: ./artifacts
+
+  - name: collect release files from artifacts
+    if: ${{ inputs.artifacts != '' }}
+    id: release_files
+    uses: actions/github-script@v6
+    env:
+      ARTIFACTS: ${{ inputs.artifacts }}
+      FILES: ${{ inputs.files }}
+    with:
+      github-token: ${{ inputs.token }}
+      result-encoding: string
+      script: |
+        const { FILES, ARTIFACTS } = process.env
+        const files = FILES
+            .split(/\s/)
+            .filter(x => x != "");
+        const artifacts = ARTIFACTS
+            .split(/\s/)
+            .filter(x => x != "")
+            .flatMap(x => files.map(y => `./artifacts/${x}/${y}`))
+            .join("\n");
+
+        return artifacts;
+
+  - uses: withlazers/copy-to-repo-action@main
+    if: ${{ inputs.helm_chart != '' && startsWith(github.ref, 'refs/tags/v') }}
+    with:
+      ssh_key: ${{ inputs.ssh_key }}
+      source_path: ${{ inputs.helm_path }}/${{ inputs.helm_chart }}
+      target_repository: withlazers/charts-withlazers
+      target_path: ./charts/${{ inputs.helm_chart }}
+      commit_message: |
+        automatic pipeline release at ${{ github.repository }} ${{ github.ref_name }}
+
+        Source: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}
+
+  - uses: softprops/action-gh-release@v1
+    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+    with:
+      fail_on_unmatched_files: true
+      generate_release_notes: true
+      draft: true
+      files: ${{ steps.release_files.outputs.result }}
